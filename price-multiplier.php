@@ -14,17 +14,21 @@ if ( ! defined( 'ABSPATH' ) ) {
 $plugin_path = trailingslashit( WP_PLUGIN_DIR ) . 'woocommerce/woocommerce.php';
 
 $all_plugins = apply_filters('active_plugins', get_option('active_plugins'));
+
 if (!stripos(implode($all_plugins), 'woocommerce.php')) {
     exit;
 }
 
-add_action( 'woocommerce_init', 'mg_price_multiplier_woocommerce_init_action' );
+// Enqueue Styles
+function wpdocs_selectively_enqueue_admin_script( $hook ) {
 
-/**
- * Function for `woocommerce_init` action-hook.
- * 
- * @return void
- */
+    wp_register_style( 'custom_wp_admin_css',  plugin_dir_url( __FILE__ ) . '/assets/main.css', false, '1.0.0' );
+    wp_enqueue_style( 'custom_wp_admin_css' );
+}
+add_action( 'admin_enqueue_scripts', 'wpdocs_selectively_enqueue_admin_script' );
+
+//------------------------ Add Custom field to Woocommerce Settings Products tab -------------------------------------------
+
 function mg_price_multiplier_woocommerce_init_action(){
 
 	define('MG_DOMAIN_NAME','mg_price_multiplier');
@@ -33,7 +37,7 @@ function mg_price_multiplier_woocommerce_init_action(){
     define('MG_FIELD_LABEL',"Multiplicador ($symbol):");
 }
 
-
+add_action( 'woocommerce_init', 'mg_price_multiplier_woocommerce_init_action' );
 
 function mg_price_multiplier_woocommerce_product_custom_fields()
 {
@@ -45,23 +49,17 @@ function mg_price_multiplier_woocommerce_product_custom_fields()
   woocommerce_wp_text_input($args);
 }
 
-
 add_action('woocommerce_product_options_advanced', 'mg_price_multiplier_woocommerce_product_custom_fields');
-add_action('woocommerce_process_product_meta', 'mg_price_multiplier_woocommerce_product_custom_fields_save');
 
 function mg_price_multiplier_woocommerce_product_custom_fields_save($post_id)
 {
-    // Custom Product Text Field
     $woocommerce_custom_product_text_field = $_POST['mg_price_multiplier_field'];
     if (!empty($woocommerce_custom_product_text_field))
         update_post_meta($post_id, 'mg_price_multiplier_field', esc_attr($woocommerce_custom_product_text_field));
     
 }
 
-
-
-
-add_filter( 'woocommerce_get_settings_products' , 'mg_price_multiplier_add_extra_general_settings' , 10, 2 );
+add_action('woocommerce_process_product_meta', 'mg_price_multiplier_woocommerce_product_mg_price_multiplier_field_variations_save');
 
 function mg_price_multiplier_add_extra_general_settings( $settings, $current_section ) {
         if( '' == $current_section ) {
@@ -75,115 +73,96 @@ function mg_price_multiplier_add_extra_general_settings( $settings, $current_sec
         } 
 
         return $settings;
-       
-
 }
 
+add_filter( 'woocommerce_get_settings_products' , 'mg_price_multiplier_add_extra_general_settings' , 10, 2 );
 
 
+// Add Field in variation 
+function mg_price_multiplier_field_variation_to_variations( $loop, $variation_data, $variation ) {
+    woocommerce_wp_text_input( array(
+        'id' => 'mg_price_multiplier_field_variation[' . $loop . ']',
+        'class' => 'mg_price_multiplier_field_variation',
+        'label' => __( MG_FIELD_LABEL, 'woocommerce' ),
+        'value' => get_post_meta( $variation->ID, 'mg_price_multiplier_field_variation', true )
+    ) );
+ }
+  
+ add_action( 'woocommerce_variation_options_pricing', 'mg_price_multiplier_field_variation_to_variations', 10, 3 );
  
+  
+ add_action( 'woocommerce_save_product_variation', 'bbloomer_save_mg_price_multiplier_field_variation_variations', 10, 2 );
+  
+ function bbloomer_save_mg_price_multiplier_field_variation_variations( $variation_id, $i ) {
+    $mg_price_multiplier_field_variation = $_POST['mg_price_multiplier_field_variation'][$i];
+    if ( isset( $mg_price_multiplier_field_variation ) ) update_post_meta( $variation_id, 'mg_price_multiplier_field_variation', esc_attr( $mg_price_multiplier_field_variation ) );
+ }
+  
+ add_filter( 'woocommerce_available_variation', 'bbloomer_add_mg_price_multiplier_field_variation_variation_data' );
+  
+ function bbloomer_add_mg_price_multiplier_field_variation_variation_data( $variations ) {
+    $variations['mg_price_multiplier_field_variation'] = '<div class="woocommerce_mg_price_multiplier_field_variation">'.MG_FIELD_LABEL.' <span>' . get_post_meta( $variations[ 'variation_id' ], 'mg_price_multiplier_field_variation', true ) . '</span></div>';
+    return $variations;
+ }
+
+//-------------------------------------------------   Change Price Flow ------------------------------------------------
+
 function mg_price_multiplier_get_multiplier($product_id){
     $general_multiplier = get_option( 'general_multiplier', true );
+
+    $product = wc_get_product( $product_id );
+
+    $type = $product->get_type();
+
+    
     $single_multiplier = get_post_meta( $product_id, 'mg_price_multiplier_field', true );
+    if(  $type === "variation"  ){
+        $single_multiplier_variation = get_post_meta( $product_id, 'mg_price_multiplier_field_variation', true );
+        $single_multiplier = ($single_multiplier_variation)? $single_multiplier_variation: $single_multiplier;
+    }
+    
+
     $multiplier = ($single_multiplier)?$single_multiplier:$general_multiplier;
+
     $multiplier = ($multiplier)?$multiplier:1;
+
     return (int) $multiplier;
 }
- 
 
-//add_filter( 'woocommerce_product_get_price', 'mg_price_multiplier_woocommerce_change_price_by_addition', 10, 2 );
+function calculate_price($price,$multiplier){
 
-//add_filter( 'woocommerce_product_get_regular_price', 'mg_price_multiplier_woocommerce_change_price_by_addition', 10, 2 );
-//add_filter( 'woocommerce_product_get_sale_price', 'mg_price_multiplier_woocommerce_change_price_by_addition', 10, 2 );
+    $price = (int) $price;
+    
+    $multiplier = (int) $multiplier;
 
-// Variations (of a variable product)
-
-function mg_price_multiplier_woocommerce_change_price_by_addition($price, $product) {
-	
-    global $post;
-
-    $post_id = $post->ID;
-
-     if($price < 1) return $price;
-
-     $multiplier = (int) mg_price_multiplier_get_multiplier($post_id);
-
-     if(!is_numeric($multiplier) ||  $multiplier < 1) return $price;
-
-    $product = wc_get_product( $post_id );
+    if(!is_numeric($price) || $price == 1 || !is_numeric($multiplier) ||  $multiplier < 1) return $price;
 
     $price = ( $price * $multiplier);
 	
     return  $price;
 }
-add_filter( 'woocommerce_product_variation_get_regular_price', 'mg_price_multiplier_variation_price' , 99, 2 );
-add_filter( 'woocommerce_product_variation_get_sale_price', 'mg_price_multiplier_variation_price' , 99, 2 );
-add_filter( 'woocommerce_product_variation_get_price', 'mg_price_multiplier_variation_price', 99, 2 );
 
-function mg_price_multiplier_variation_price($price,$variation){
-    return (int) $price * 100;
+function mg_price_multiplier_change_price_single_product($price, $product) {
+	
+    if((int)$price < 1 || $price == "" ) return $price;
+    $multiplier = (int) mg_price_multiplier_get_multiplier($product->get_ID());
+    return  calculate_price($price,$multiplier);
 }
 
-add_filter( 'woocommerce_add_cart_item_data', 'mg_price_multiplier_add_cart_item_data', 10, 3 );
+add_filter( 'woocommerce_product_get_price', 'mg_price_multiplier_change_price_single_product', 10, 2 );
+add_filter( 'woocommerce_product_get_regular_price', 'mg_price_multiplier_change_price_single_product', 10, 2 );
+add_filter( 'woocommerce_product_get_sale_price', 'mg_price_multiplier_change_price_single_product', 10, 2 );
+add_filter( 'woocommerce_product_variation_get_regular_price', 'mg_price_multiplier_change_price_single_product' , 99, 2 );
+add_filter( 'woocommerce_product_variation_get_sale_price', 'mg_price_multiplier_change_price_single_product' , 99, 2 );
+add_filter( 'woocommerce_product_variation_get_price', 'mg_price_multiplier_change_price_single_product', 99, 2 );
+add_filter( 'woocommerce_variation_prices_price', 'mg_price_multiplier_change_price_single_product', 99, 2 );
+
+
+
  
-function mg_price_multiplier_add_cart_item_data( $cart_item_data, $product_id, $variation_id ) {
-     // get product id & price
-    $product = wc_get_product( $product_id );
-    $price = (int) $product->get_price();
-    // extra pack checkbox
 
-    $multiplier = mg_price_multiplier_get_multiplier($product_id); 
-    $cart_item_data['new_price'] = $price * $multiplier;
-    
-    return $cart_item_data;
-}
 
-add_action( 'woocommerce_before_calculate_totals', 'mg_price_multiplier_before_calculate_totals', 10, 1 );
- 
-function mg_price_multiplier_before_calculate_totals( $cart_obj ) {
-    if ( is_admin() && ! defined( 'DOING_AJAX' ) ) {
-    return;
-    }
-    // Iterate through each cart item
-    
-    foreach( $cart_obj->get_cart() as $key=>$value ) {
- 
-        $multiplier = mg_price_multiplier_get_multiplier($value['data']->get_id()); 
-        if(!isset($multiplier) || empty($multiplier)) return;
-        $price = $value['data']->get_price( );
-        if(!isset($price) || empty($price)) return;
-        $new_price = $price *$multiplier;
-        if(!isset($new_price) || empty($new_price)) return;
-        
-        $value['data']->set_price( ( $new_price) );
-        
-    }
-}
 
-add_action( 'admin_head', function () { 
-    ?>
-    <style type="text/css">
-        label[for="general_multiplier"]{
-            vertical-align: top;
-            text-align: left;
-            padding: 20px 10px 20px 0;
-            width: 200px;
-            line-height: 1.3;
-            font-weight: 600;
-            font-size:13px;
-            color:black;
-        }
-        input#general_multiplier{
-                min-width:100%;
-            }
-        @media(min-width:768px){
-            input#general_multiplier{
-                min-width:398px;
-                margin-left:9%;
-                max-width:714px;
-            }
-        }
 
-    </style>
-    <?php
-});
+
+
